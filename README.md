@@ -65,6 +65,14 @@ The algorithm prioritizes automation over absolute precision. For complex models
 
 Remember, just like a bad skinning job can make your character's elbows look weird, a bad joke about rigging can make your audience cringe! But we're willing to take that risk.
 
+## Import into Blender
+
+Using File / Import is a gLTF 2.0 option. Use it.
+For Bones and Skin, if you use 'Bone Dir' == blender, you'll want to set Disable Bone Shape.
+
+Once imported, select the skeleton. Enter Pose Mode (Ctrl-TAB) then go to the Pose menu,
+and select Clear Transform / All.
+
 ## License
 
 MIT

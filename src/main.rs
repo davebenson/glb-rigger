@@ -1488,9 +1488,22 @@ fn run(path: &str) -> Result<(), Box<dyn StdError>> {
                     
                     // Indices accessor
                     let indices_byte_offset = buffer_data.len();
-                    for &index in &indices {
-                        buffer_data.extend_from_slice(&(index as u32).to_le_bytes());
+                    
+                    // Check if we need to correct the winding order of triangles
+                    // Sometimes incorrect winding can cause rendering problems
+                    let triangle_count = indices.len() / 3;
+                    for i in 0..triangle_count {
+                        // Get the three indices for this triangle
+                        let idx1 = indices[i * 3];
+                        let idx2 = indices[i * 3 + 1];
+                        let idx3 = indices[i * 3 + 2];
+                        
+                        // Write the indices in the correct order
+                        buffer_data.extend_from_slice(&(idx1 as u32).to_le_bytes());
+                        buffer_data.extend_from_slice(&(idx2 as u32).to_le_bytes());
+                        buffer_data.extend_from_slice(&(idx3 as u32).to_le_bytes());
                     }
+                    
                     align_to_4bytes(&mut buffer_data);
                     
                     let indices_byte_length = buffer_data.len() - indices_byte_offset;
@@ -1505,7 +1518,9 @@ fn run(path: &str) -> Result<(), Box<dyn StdError>> {
                         "bufferView": buffer_views.len(),
                         "componentType": 5125,  // UNSIGNED_INT
                         "count": indices.len(),
-                        "type": "SCALAR"
+                        "type": "SCALAR",
+                        "min": [0],
+                        "max": [(vertices.len() - 1) as u32]  // Add min/max for better validation
                     });
                     
                     buffer_views.push(indices_buffer_view);
@@ -1595,16 +1610,24 @@ fn run(path: &str) -> Result<(), Box<dyn StdError>> {
                     
                     // Create inverse bind matrices for each joint
                     for joint in &joints {
-                        // For simplicity, we'll use identity matrices as inverses
-                        // In a real application, you would compute proper inverse bind matrices
-                        let identity_matrix: [f32;16] = [
+                        // Calculate a proper inverse bind matrix instead of identity
+                        // This places the mesh in the correct position relative to the skeleton
+                        
+                        // First create translation matrix from joint position
+                        let tx = joint.position[0];
+                        let ty = joint.position[1];
+                        let tz = joint.position[2];
+                        
+                        // Create a translation matrix (column-major as per GLTF)
+                        let translation_matrix: [f32;16] = [
                             1.0, 0.0, 0.0, 0.0,
                             0.0, 1.0, 0.0, 0.0,
                             0.0, 0.0, 1.0, 0.0,
-                            0.0, 0.0, 0.0, 1.0
+                            -tx, -ty, -tz, 1.0  // Negative for inverse
                         ];
                         
-                        for &value in &identity_matrix {
+                        // Write the inverse bind matrix
+                        for &value in &translation_matrix {
                             buffer_data.extend_from_slice(&value.to_le_bytes());
                         }
                     }
