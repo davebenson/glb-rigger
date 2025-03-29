@@ -18,12 +18,22 @@ pub type Vec3 = Vector3d<f32>;
 
 // hardcoded everywhere
 const MICROPATCH_SIZE: u32 = 8;
+const MICROPATCH_TOTAL_SIZE: u32 = MICROPATCH_SIZE*MICROPATCH_SIZE*MICROPATCH_SIZE;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Micropatch {
+    n_set: u32,
     bits: [u8; 64]
 }
-const MICROPATCH_FULL: Micropatch = Micropatch { bits: [0xff; 64] };
-const MICROPATCH_EMPTY: Micropatch = Micropatch { bits: [0x00; 64] };
+const MICROPATCH_FULL: Micropatch = Micropatch { n_set: MICROPATCH_TOTAL_SIZE, bits: [0xff; 64] };
+const MICROPATCH_EMPTY: Micropatch = Micropatch { n_set: 0, bits: [0x00; 64] };
+
+fn count_bits(bits: [u8; 64]) -> u32 {
+  let mut rv: u32 = 0;
+  for byte in bits {
+    rv += byte.count_ones()
+  }
+  rv
+}
 
 impl Micropatch {
   fn set(self: &mut Micropatch, xf: u32,yf: u32,zf: u32,v: bool) -> bool {
@@ -34,6 +44,8 @@ impl Micropatch {
       } else {
           *p &= !(1 << xf)
       }
+      if v { self.n_set += 1 }
+      if old == 1 { self.n_set -= 1 }
       if old == 0 { false } else { true }
   }
   fn get(self: &Micropatch, xf: u32,yf: u32,zf: u32) -> bool {
@@ -46,54 +58,60 @@ impl Micropatch {
   }
   fn invert_inplace(self: &mut Micropatch) {
       for i in 0..64 { self.bits[i] = !self.bits[i] }
+      self.n_set = MICROPATCH_TOTAL_SIZE - self.n_set;
   }
   fn is_all_zeros(self: &Micropatch) -> bool {
-    for i in 0..64 {
-        if self.bits[i] != 0 { return false }
-    }
-    true
+    self.n_set == 0
+    //for i in 0..64 {
+    //    if self.bits[i] != 0 { return false }
+    //}
+    //true
   }
   fn is_all_ones(self: &Micropatch) -> bool {
-    for i in 0..64 {
-        if self.bits[i] != 0xff { return false }
-    }
-    true
+    self.n_set == MICROPATCH_TOTAL_SIZE
+    //for i in 0..64 {
+    //    if self.bits[i] != 0xff { return false }
+    //}
+    //true
   }
   fn intersect(self: &Micropatch, other: &Micropatch) -> Micropatch {
     let mut bits: [u8; 64] = self.bits;
     for i in 0..64 {
       bits[i] &= other.bits[i]
     }
-    Micropatch { bits: bits }
+    Micropatch { n_set: count_bits(bits), bits: bits }
   }
   fn union(self: &Micropatch, other: &Micropatch) -> Micropatch {
     let mut bits: [u8; 64] = self.bits;
     for i in 0..64 {
       bits[i] |= other.bits[i]
     }
-    Micropatch { bits: bits }
+    Micropatch { n_set: count_bits(bits), bits: bits }
   }
   fn difference(self: &Micropatch, other: &Micropatch) -> Micropatch {
     let mut bits: [u8; 64] = self.bits;
     for i in 0..64 {
       bits[i] &= !other.bits[i]
     }
-    Micropatch { bits: bits }
+    Micropatch { n_set: count_bits(bits), bits: bits }
   }
   fn intersect_inplace(self: &mut Micropatch, other: &Micropatch) {
     for i in 0..64 {
       self.bits[i] &= other.bits[i]
     }
+    self.n_set = count_bits(self.bits);
   }
   fn union_inplace(self: &mut Micropatch, other: &Micropatch) {
     for i in 0..64 {
       self.bits[i] |= other.bits[i]
     }
+    self.n_set = count_bits(self.bits);
   }
   fn difference_inplace(self: &mut Micropatch, other: &Micropatch) {
     for i in 0..64 {
       self.bits[i] &= !other.bits[i]
     }
+    self.n_set = count_bits(self.bits);
   }
 
 }
@@ -164,7 +182,7 @@ impl VoxelSet {
         
         // Deep clone the micropatches
         for patch in &self.micropatches {
-            new_set.micropatches.push(Micropatch { bits: patch.bits });
+            new_set.micropatches.push(Micropatch { n_set: patch.n_set, bits: patch.bits });
         }
         
         new_set
@@ -226,14 +244,9 @@ impl VoxelSet {
                 true
             },
             MicropatchStatus::Subdivided(si) => {
-                let patch = &mut self.micropatches[*si as usize];
-
-                // in the current represention, it's better to
-                // clean up Full and Empty patches at a later phase.
-                patch.set(xf, yf, zf, value)
-
-                /*
-                if value != set_rv {
+                let mp_index = *si;
+                let patch = &mut self.micropatches[mp_index as usize];
+                if value != patch.set(xf, yf, zf, value) {
                     let liberate = if value {
                                      if patch.is_all_ones() {
                                          *elt = MicropatchStatus::Full;
@@ -256,7 +269,6 @@ impl VoxelSet {
                 } else {
                     value
                 }
-                */
             }
         }
     }
@@ -368,7 +380,7 @@ impl VoxelSet {
                                             self.grid[idx] = MicropatchStatus::Subdivided(mp_index as u32);
                                             self.micropatches[mp_index].bits.copy_from_slice(&other_patch.bits);
                                         } else {
-                                            let new_patch = Micropatch { bits: other_patch.bits };
+                                            let new_patch = Micropatch { n_set: other_patch.n_set, bits: other_patch.bits };
                                             self.micropatches.push(new_patch);
                                             let mp_index = (self.micropatches.len() - 1) as usize;
                                             self.grid[idx] = MicropatchStatus::Subdivided(mp_index as u32);
