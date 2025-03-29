@@ -1,10 +1,7 @@
-#![allow(dead_code)]
-
-use vector2d::Vector2D;
+//use vector2d::Vector2D;
 use vector3d::Vector3d;
-use std::collections::VecDeque;
 
-pub type Vec2 = Vector2D<f32>;
+//pub type Vec2 = Vector2D<f32>;
 pub type Vec3 = Vector3d<f32>;
 
 
@@ -74,27 +71,27 @@ impl Micropatch {
     //}
     //true
   }
-  fn intersect(self: &Micropatch, other: &Micropatch) -> Micropatch {
-    let mut bits: [u8; 64] = self.bits;
-    for i in 0..64 {
-      bits[i] &= other.bits[i]
-    }
-    Micropatch { n_set: count_bits(bits), bits: bits }
-  }
-  fn union(self: &Micropatch, other: &Micropatch) -> Micropatch {
-    let mut bits: [u8; 64] = self.bits;
-    for i in 0..64 {
-      bits[i] |= other.bits[i]
-    }
-    Micropatch { n_set: count_bits(bits), bits: bits }
-  }
-  fn difference(self: &Micropatch, other: &Micropatch) -> Micropatch {
-    let mut bits: [u8; 64] = self.bits;
-    for i in 0..64 {
-      bits[i] &= !other.bits[i]
-    }
-    Micropatch { n_set: count_bits(bits), bits: bits }
-  }
+  //fn intersect(self: &Micropatch, other: &Micropatch) -> Micropatch {
+  //  let mut bits: [u8; 64] = self.bits;
+  //  for i in 0..64 {
+  //    bits[i] &= other.bits[i]
+  //  }
+  //  Micropatch { n_set: count_bits(bits), bits: bits }
+  //}
+  //fn union(self: &Micropatch, other: &Micropatch) -> Micropatch {
+  //  let mut bits: [u8; 64] = self.bits;
+  //  for i in 0..64 {
+  //    bits[i] |= other.bits[i]
+  //  }
+  //  Micropatch { n_set: count_bits(bits), bits: bits }
+  //}
+  //fn difference(self: &Micropatch, other: &Micropatch) -> Micropatch {
+  //  let mut bits: [u8; 64] = self.bits;
+  //  for i in 0..64 {
+  //    bits[i] &= !other.bits[i]
+  //  }
+  //  Micropatch { n_set: count_bits(bits), bits: bits }
+  //}
   fn intersect_inplace(self: &mut Micropatch, other: &Micropatch) {
     for i in 0..64 {
       self.bits[i] &= other.bits[i]
@@ -186,6 +183,19 @@ impl VoxelSet {
         }
         
         new_set
+    }
+
+    pub fn voxel_count(self: &Self) -> usize {
+        let mut count: usize = 0;
+        for i in 0 .. (self.size_i.0 * self.size_i.1 * self.size_i.2) {
+            count += match self.grid[i] {
+                         MicropatchStatus::Empty => 0,
+                         MicropatchStatus::Full => MICROPATCH_TOTAL_SIZE,
+                         MicropatchStatus::Subdivided(si) =>
+                           self.micropatches[si as usize].n_set
+                     } as usize;
+        }
+        count
     }
 
     // Allocate a micropatch, initializing it with 'data'.
@@ -337,76 +347,31 @@ impl VoxelSet {
         assert_eq!(self.size, other.size, "VoxelSet dimensions must match for boolean operations");
         
         // Loop through grid cells
-        for xi in 0..self.size_i.0 / MICROPATCH_SIZE as usize {
-            for yi in 0..self.size_i.1 / MICROPATCH_SIZE as usize {
-                for zi in 0..self.size_i.2 / MICROPATCH_SIZE as usize {
-                    let idx = (zi * (self.size_i.1 / MICROPATCH_SIZE as usize) * (self.size_i.0 / MICROPATCH_SIZE as usize) + 
-                              yi * (self.size_i.0 / MICROPATCH_SIZE as usize) + xi) as usize;
-                    
-                    // Fast path: if other grid cell is Full, nothing to do
-                    // If other is Empty, result is Empty
-                    match other.grid[idx] {
-                        MicropatchStatus::Empty => {
-                            // Result is Empty
-                            match &self.grid[idx] {
-                                MicropatchStatus::Subdivided(si) => {
-                                    self.free_micropatches.push(*si);
-                                },
-                                _ => {}
-                            }
-                            self.grid[idx] = MicropatchStatus::Empty;
-                        },
-                        MicropatchStatus::Full => {
-                            // No change needed to self
-                            continue;
-                        },
-                        MicropatchStatus::Subdivided(other_si) => {
-                            // Need to merge patches
-                            match self.grid[idx] {
-                                MicropatchStatus::Empty => {
-                                    // Result is empty, nothing to do
-                                },
-                                MicropatchStatus::Full => {
-                                    // Copy the entire micropatch from other
-                                    let other_patch = &other.micropatches[other_si as usize];
-                                    
-                                    // If it's all ones, just keep Full
-                                    if other_patch.is_all_ones() {
-                                        continue;
-                                    } else {
-                                        // Otherwise create a new micropatch with the same bits
-                                        if self.free_micropatches.len() > 0 {
-                                            let mp_index = self.free_micropatches.pop().unwrap() as usize;
-                                            self.grid[idx] = MicropatchStatus::Subdivided(mp_index as u32);
-                                            self.micropatches[mp_index].bits.copy_from_slice(&other_patch.bits);
-                                        } else {
-                                            let new_patch = Micropatch { n_set: other_patch.n_set, bits: other_patch.bits };
-                                            self.micropatches.push(new_patch);
-                                            let mp_index = (self.micropatches.len() - 1) as usize;
-                                            self.grid[idx] = MicropatchStatus::Subdivided(mp_index as u32);
-                                        }
-                                    }
-                                },
-                                MicropatchStatus::Subdivided(self_si) => {
-                                    // Need to AND the bits
-                                    let self_patch = &mut self.micropatches[self_si as usize];
-                                    let other_patch = &other.micropatches[other_si as usize];
-                                    
-                                    // AND the bits
-                                    for i in 0..64 {
-                                        self_patch.bits[i] &= other_patch.bits[i];
-                                    }
-                                    
-                                    // Check if it's now all zeros
-                                    if self_patch.is_all_zeros() {
-                                        self.grid[idx] = MicropatchStatus::Empty;
-                                        self.free_micropatches.push(self_si);
-                                    }
-                                }
-                            }
-                        }
+        for idx in 0..self.total_micropatches {
+            //let self_grid = &mut self.grid[idx];
+            //let other_grid = &other.grid[idx];
+            match (self.grid[idx].clone(), other.grid[idx].clone()) {
+                (_, MicropatchStatus::Full) => {},
+                (MicropatchStatus::Empty, _) => {},
+                (MicropatchStatus::Full, MicropatchStatus::Subdivided(si)) => {
+                    self.grid[idx] = MicropatchStatus::Subdivided(self._allocate_micropatch(&other.micropatches[si as usize]))
+                },
+                (MicropatchStatus::Full, MicropatchStatus::Empty) => {
+                    self.grid[idx] = MicropatchStatus::Empty
+                },
+                (MicropatchStatus::Subdivided(a_si), MicropatchStatus::Subdivided(b_si)) => {
+                    let a = &mut self.micropatches[a_si as usize];
+                    let b = &other.micropatches[b_si as usize];
+                    a.intersect_inplace(b);
+                    if a.is_all_zeros() {
+                        self.free_micropatches.push(a_si);
+                        self.grid[idx] = MicropatchStatus::Empty
                     }
-                }
+                },
+                (MicropatchStatus::Subdivided(a_si), MicropatchStatus::Empty) =>  {
+                    self.free_micropatches.push(a_si);
+                    self.grid[idx] = MicropatchStatus::Empty
+                },
             }
         }
     }
@@ -417,90 +382,33 @@ impl VoxelSet {
         assert_eq!(self.size, other.size, "VoxelSet dimensions must match for boolean operations");
         
         // Loop through grid cells
-        for xi in 0..self.size_i.0 / MICROPATCH_SIZE as usize {
-            for yi in 0..self.size_i.1 / MICROPATCH_SIZE as usize {
-                for zi in 0..self.size_i.2 / MICROPATCH_SIZE as usize {
-                    let idx = (zi * (self.size_i.1 / MICROPATCH_SIZE as usize) * (self.size_i.0 / MICROPATCH_SIZE as usize) + 
-                              yi * (self.size_i.0 / MICROPATCH_SIZE as usize) + xi) as usize;
-                    
-                    // Fast paths
-                    // If other is Empty, no change
-                    // If other is Full, result is Empty
-                    match other.grid[idx] {
-                        MicropatchStatus::Empty => {
-                            // No change needed
-                            continue;
-                        },
-                        MicropatchStatus::Full => {
-                            // Result is Empty
-                            match &self.grid[idx] {
-                                MicropatchStatus::Subdivided(si) => {
-                                    self.free_micropatches.push(*si);
-                                },
-                                _ => {}
-                            }
-                            self.grid[idx] = MicropatchStatus::Empty;
-                        },
-                        MicropatchStatus::Subdivided(other_si) => {
-                            match self.grid[idx] {
-                                MicropatchStatus::Empty => {
-                                    // Result is empty, nothing to do
-                                },
-                                MicropatchStatus::Full => {
-                                    // Need to create a new micropatch with NOT of other's bits
-                                    let other_patch = &other.micropatches[other_si as usize];
-                                    
-                                    // Create a new micropatch with the inverted bits
-                                    if self.free_micropatches.len() > 0 {
-                                        let mp_index = self.free_micropatches.pop().unwrap() as usize;
-                                        self.grid[idx] = MicropatchStatus::Subdivided(mp_index as u32);
-                                        
-                                        for i in 0..64 {
-                                            self.micropatches[mp_index].bits[i] = !other_patch.bits[i];
-                                        }
-                                    } else {
-                                        let mut new_patch = MICROPATCH_EMPTY;
-                                        for i in 0..64 {
-                                            new_patch.bits[i] = !other_patch.bits[i];
-                                        }
-                                        self.micropatches.push(new_patch);
-                                        let mp_index = (self.micropatches.len() - 1) as usize;
-                                        self.grid[idx] = MicropatchStatus::Subdivided(mp_index as u32);
-                                    }
-                                    
-                                    // Check if all zeros
-                                    if self.micropatches[match self.grid[idx] {
-                                        MicropatchStatus::Subdivided(si) => si as usize,
-                                        _ => panic!("Expected Subdivided")
-                                    }].is_all_zeros() {
-                                        let si = match &self.grid[idx] {
-                                            MicropatchStatus::Subdivided(si) => *si,
-                                            _ => panic!("Expected Subdivided")
-                                        };
-                                        self.grid[idx] = MicropatchStatus::Empty;
-                                        self.free_micropatches.push(si);
-                                    }
-                                },
-                                MicropatchStatus::Subdivided(self_si) => {
-                                    // Need to AND with NOT of other's bits
-                                    let self_patch = &mut self.micropatches[self_si as usize];
-                                    let other_patch = &other.micropatches[other_si as usize];
-                                    
-                                    // self &= ~other
-                                    for i in 0..64 {
-                                        self_patch.bits[i] &= !other_patch.bits[i];
-                                    }
-                                    
-                                    // Check if it's now all zeros
-                                    if self_patch.is_all_zeros() {
-                                        self.grid[idx] = MicropatchStatus::Empty;
-                                        self.free_micropatches.push(self_si);
-                                    }
-                                }
-                            }
-                        }
+        for idx in 0..self.total_micropatches {
+            //let self_grid = &mut self.grid[idx];
+            //let other_grid = &other.grid[idx];
+            match (self.grid[idx].clone(), other.grid[idx].clone()) {
+                (_, MicropatchStatus::Empty) => {},
+                (MicropatchStatus::Empty, _) => {},
+                (MicropatchStatus::Full, MicropatchStatus::Subdivided(si)) => {
+                    let mut m = other.micropatches[si as usize].clone();
+                    m.invert_inplace();
+                    self.grid[idx] = MicropatchStatus::Subdivided(self._allocate_micropatch(&m))
+                },
+                (MicropatchStatus::Full, MicropatchStatus::Full) => {
+                    self.grid[idx] = MicropatchStatus::Empty
+                },
+                (MicropatchStatus::Subdivided(a_si), MicropatchStatus::Subdivided(b_si)) => {
+                    let a = &mut self.micropatches[a_si as usize];
+                    let b = &other.micropatches[b_si as usize];
+                    a.difference_inplace(b);
+                    if a.is_all_zeros() {
+                        self.free_micropatches.push(a_si);
+                        self.grid[idx] = MicropatchStatus::Empty
                     }
-                }
+                },
+                (MicropatchStatus::Subdivided(a_si), MicropatchStatus::Full) =>  {
+                    self.free_micropatches.push(a_si);
+                    self.grid[idx] = MicropatchStatus::Empty
+                },
             }
         }
     }
@@ -518,70 +426,35 @@ impl VoxelSet {
 
     // Flood fill starting from the given coordinates
     // Returns a new VoxelSet containing only the filled region
-    pub fn flood_fill(&self, start_x: u32, start_y: u32, start_z: u32) -> Self {
-        // Check if start point is in bounds
-        if start_x >= self.size.0 || start_y >= self.size.1 || start_z >= self.size.2 {
-            return Self::new(self.size.0, self.size.1, self.size.2);
+    pub fn flood_fill(&mut self, start_x: u32, start_y: u32, start_z: u32) {
+        let mut v: Vec<(u32,u32,u32)> = Vec::new();
+
+        println!("flood_fill start at {} {} {} (value={})",start_x,start_y,start_z,self.get(start_x,start_y,start_z));
+
+        if !self.set(start_x,start_y,start_z, true) {
+            v.push((start_x, start_y, start_z));
         }
-        
-        // Check if start point is already filled
-        let target_value = self.get(start_x, start_y, start_z);
-        
-        // Create a new VoxelSet for the result
-        let mut result = Self::new(self.size.0, self.size.1, self.size.2);
-        
-        // Create a boolean array to track visited cells
-        let mut visited = vec![false; (self.size.0 * self.size.1 * self.size.2) as usize];
-        
-        // Queue for BFS
-        let mut queue = VecDeque::new();
-        
-        // Add the start point to queue
-        queue.push_back((start_x, start_y, start_z));
-        
-        // Mark start point as visited
-        let flat_index = (start_z * self.size.1 * self.size.0 + start_y * self.size.0 + start_x) as usize;
-        visited[flat_index] = true;
-        
-        // BFS traversal
-        while !queue.is_empty() {
-            let (x, y, z) = queue.pop_front().unwrap();
-            
-            // Set this cell in the result
-            result.set(x, y, z, true);
-            
-            // Check 6 neighbors (6-connected in 3D)
-            let neighbors = [
-                (x.checked_sub(1), Some(y), Some(z)),
-                (Some(x + 1), Some(y), Some(z)),
-                (Some(x), y.checked_sub(1), Some(z)),
-                (Some(x), Some(y + 1), Some(z)),
-                (Some(x), Some(y), z.checked_sub(1)),
-                (Some(x), Some(y), Some(z + 1)),
-            ];
-            
-            for (nx_opt, ny_opt, nz_opt) in neighbors {
-                // Check if neighbor coordinates are valid
-                if let (Some(nx), Some(ny), Some(nz)) = (nx_opt, ny_opt, nz_opt) {
-                    // Check if neighbor is in bounds
-                    if nx < self.size.0 && ny < self.size.1 && nz < self.size.2 {
-                        // Calculate flat index for the neighbor
-                        let neighbor_index = (nz * self.size.1 * self.size.0 + ny * self.size.0 + nx) as usize;
-                        
-                        // Check if neighbor is not visited and has the same value as the target
-                        if !visited[neighbor_index] && self.get(nx, ny, nz) == target_value {
-                            // Mark as visited
-                            visited[neighbor_index] = true;
-                            
-                            // Add to queue
-                            queue.push_back((nx, ny, nz));
-                        }
-                    }
-                }
+        while let Some((x,y,z)) = v.pop() {
+            println!("flood fill: looking around {} {} {} (stack size {})",x,y,z,v.len());
+            if x > 0 {
+              if !self.set(x-1,y,z,true) { v.push((x-1,y,z)) }
+            }
+            if y > 0 {
+              if !self.set(x,y-1,z,true) { v.push((x,y-1,z)) }
+            }
+            if z > 0 {
+              if !self.set(x,y,z-1,true) { v.push((x,y,z-1)) }
+            }
+            if x < self.size.0 - 1 {
+              if !self.set(x+1,y,z,true) { v.push((x+1,y,z)) }
+            }
+            if y < self.size.1 - 1 {
+              if !self.set(x,y+1,z,true) { v.push((x,y+1,z)) }
+            }
+            if z < self.size.2 - 1 {
+              if !self.set(x,y,z+1,true) { v.push((x,y,z+1)) }
             }
         }
-        
-        result
     }
 }
 
@@ -981,8 +854,64 @@ mod tests {
     }
 
     #[test]
+    fn test_flood_fill_cube_interior() {
+        let mut vs = VoxelSet::new(8, 8, 8);
+        
+        // Create a hollow cube
+        for x in 1..6 {
+            for y in 1..6 {
+                for z in 1..6 {
+                    if x == 1 || x == 5 || y == 1 || y == 5 || z == 1 || z == 5 {
+                        vs.set(x, y, z, true);
+                    }
+                }
+            }
+        }
+        
+        // Flood fill inside the cube
+        vs.flood_fill(2, 2, 2);
+        
+        for x in 0..8 {
+            for y in 0..8 {
+                for z in 0..8 {
+                    assert_eq!(vs.get(x,y,z), 1 <= x && x <= 5
+                                           && 1 <= y && y <= 5
+                                           && 1 <= z && z <= 5);
+                }
+            }
+        }
+    }
+    #[test]
+    fn test_flood_fill_cube_exterior() {
+        let mut vs = VoxelSet::new(8, 8, 8);
+        
+        // Create a hollow cube
+        for x in 1..6 {
+            for y in 1..6 {
+                for z in 1..6 {
+                    if x == 1 || x == 5 || y == 1 || y == 5 || z == 1 || z == 5 {
+                        vs.set(x, y, z, true);
+                    }
+                }
+            }
+        }
+        
+        // Flood fill inside the cube
+        vs.flood_fill(0, 0, 0);
+        
+        for x in 0..8 {
+            for y in 0..8 {
+                for z in 0..8 {
+                    assert_eq!(vs.get(x,y,z), !(2 <= x && x <= 4
+                                             && 2 <= y && y <= 4
+                                             && 2 <= z && z <= 4));
+                }
+            }
+        }
+    }
+    #[test]
     fn test_flood_fill() {
-        let mut vs = VoxelSet::new(10, 10, 10);
+        let mut vs = VoxelSet::new(16, 16, 16);
         
         // Create a hollow cube
         for x in 1..6 {
@@ -999,18 +928,18 @@ mod tests {
         vs.set(1, 3, 3, false);
         
         // Flood fill from outside the cube
-        let filled = vs.flood_fill(0, 0, 0);
+        vs.flood_fill(0, 0, 0);
         
         // Check that outside is filled
-        assert!(filled.get(0, 0, 0));
-        assert!(filled.get(1, 3, 3)); // The door
+        assert!(vs.get(0, 0, 0));
+        assert!(vs.get(1, 3, 3)); // The door
         
-        // Check that inside the cube is filled (through the door)
-        assert!(filled.get(2, 3, 3));
-        assert!(filled.get(3, 3, 3));
+        // Checkvsinside the cube is filled (through the door)
+        assert!(vs.get(2, 3, 3));
+        assert!(vs.get(3, 3, 3));
         
         // Check that the walls are not filled
-        assert!(!filled.get(1, 1, 1));
-        assert!(!filled.get(5, 5, 5));
+        //assert!(!vs.get(1, 1, 1));
+        //assert!(!vs.get(5, 5, 5));
     }
 }

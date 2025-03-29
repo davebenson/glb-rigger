@@ -7,8 +7,6 @@ use std::{fs, io};
 use std::path::Path;
 use std::boxed::Box;
 use std::error::Error as StdError;
-use std::cmp::{min, max};
-use std::io::Write;
 //use itertools::Itertools;
 mod voxel_set;
 ///use voxel_set::VoxelSet;
@@ -31,21 +29,21 @@ fn find_triangular_primitive(gltf: &gltf::Gltf) -> gltf::Primitive {
 }
 
 // Function to normalize a quaternion
-fn normalize_quaternion(quat: [f32; 4]) -> [f32; 4] {
-    let length = (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3]).sqrt();
-    
-    // Avoid division by zero
-    if length < 1e-6 {
-        return [0.0, 0.0, 0.0, 1.0]; // Return identity quaternion
-    }
-    
-    [
-        quat[0] / length,
-        quat[1] / length,
-        quat[2] / length,
-        quat[3] / length
-    ]
-}
+//fn normalize_quaternion(quat: [f32; 4]) -> [f32; 4] {
+//    let length = (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3]).sqrt();
+//    
+//    // Avoid division by zero
+//    if length < 1e-6 {
+//        return [0.0, 0.0, 0.0, 1.0]; // Return identity quaternion
+//    }
+//    
+//    [
+//        quat[0] / length,
+//        quat[1] / length,
+//        quat[2] / length,
+//        quat[3] / length
+//    ]
+//}
 
 
 fn run(path: &str) {
@@ -197,15 +195,16 @@ fn run(path: &str) {
     let mut voxels = voxel_set::VoxelSet::new(resolution, resolution, resolution);
 
     for tri_indices in indices.chunks(3) {
-        //let tri_vertices: [Vec3; 3] = tri_indices.map(|i| vertices[i]).collect_array();
-        //let a = vertices[tri_indices.next().unwrap()];
-        //let b = vertices[tri_indices.next().unwrap()];
-        //let c = vertices[tri_indices.next().unwrap()];
         let a = (vertices[tri_indices[0] as usize] * world_to_vm_scale) + world_to_vm_offset;
         let b = (vertices[tri_indices[1] as usize] * world_to_vm_scale) + world_to_vm_offset;
         let c = (vertices[tri_indices[2] as usize] * world_to_vm_scale) + world_to_vm_offset;
         voxels.fill_tri(a,b,c);
     }
+    println!("after triangles rendered: {}", voxels.voxel_count());
+    let mut voxels_copy = voxels.clone();
+    voxels_copy.flood_fill(0,0,0);
+    println!("after exterior flood-fill: {}", voxels_copy.voxel_count());
+
 
 
 //    println!("Created voxel representation with {} voxels", voxels.len());
@@ -1927,202 +1926,52 @@ fn read_f32(bytes: &[u8]) -> f32 {
     f32::from_le_bytes(bytes_array)
 }
 
-// Helper function to add an edge to the adjacency map
-// Normalizes the edge so that the smaller vertex index comes first
-fn add_edge_to_map(
-    edge_map: &mut std::collections::HashMap<(u32, u32), Vec<usize>>,
-    v1: u32,
-    v2: u32,
-    triangle_idx: usize
-) {
-    // Normalize the edge (smaller index first)
-    let edge = if v1 < v2 { (v1, v2) } else { (v2, v1) };
-    
-    // Add the triangle to the edge's list
-    edge_map.entry(edge)
-        .or_insert_with(Vec::new)
-        .push(triangle_idx);
-}
-
 // Implementation of Bresenham's line algorithm to voxelize a line segment in 2D
 // Returns a vector of (x, y) coordinates that represent the voxels the line passes through
-fn bresenham_line(x1: isize, y1: isize, x2: isize, y2: isize) -> Vec<(isize, isize)> {
-    let mut result = Vec::new();
-    
-    // Calculate changes in x and y
-    let dx = (x2 - x1).abs();
-    let dy = (y2 - y1).abs();
-    
-    // Determine the direction to step in x and y
-    let sx = if x1 < x2 { 1 } else { -1 };
-    let sy = if y1 < y2 { 1 } else { -1 };
-    
-    // Error term for deciding which voxel to move to next
-    let mut err = if dx > dy { dx } else { -dy } / 2;
-    let mut err2;
-    
-    // Start at the first point
-    let mut x = x1;
-    let mut y = y1;
-    
-    loop {
-        // Add current point to the result
-        result.push((x, y));
-        
-        // Check if we've reached the end point
-        if x == x2 && y == y2 { break; }
-        
-        // Update the error term
-        err2 = err;
-        
-        // Move in x direction if needed
-        if err2 > -dx {
-            err -= dy;
-            x += sx;
-        }
-        
-        // Move in y direction if needed
-        if err2 < dy {
-            err += dx;
-            y += sy;
-        }
-    }
-    
-    result
-}
-
-fn normalize_glb_quaternions(input_path: &str, output_path: &str) -> Result<(), Box<dyn StdError>> {
-    println!("Loading GLB file: {}", input_path);
-    
-    // Open and read the GLB file
-    let file = fs::File::open(input_path)?;
-    let reader = io::BufReader::new(file);
-    let gltf = gltf::Gltf::from_reader(reader)?;
-    
-    // Parse JSON document
-    let json = gltf.document.as_json();
-    let json_string = serde_json::to_string(json)?;
-    let mut gltf_json: serde_json::Value = serde_json::from_str(&json_string)?;
-    
-    println!("Normalizing rotation quaternions in nodes...");
-    
-    // Process nodes and normalize rotation quaternions
-    let mut normalized_nodes = 0;
-    let mut out_of_range_nodes = 0;
-    
-    if let Some(nodes) = gltf_json["nodes"].as_array_mut() {
-        for (i, node) in nodes.iter_mut().enumerate() {
-            if let Some(rotation) = node.get_mut("rotation") {
-                if let Some(rotation_array) = rotation.as_array_mut() {
-                    if rotation_array.len() == 4 {
-                        // Extract quaternion values
-                        let mut quat = [0.0f32; 4];
-                        let mut out_of_range = false;
-                        
-                        for j in 0..4 {
-                            if let Some(value) = rotation_array[j].as_f64() {
-                                quat[j] = value as f32;
-                                // Check if any component is out of the valid range [-1, 1]
-                                if quat[j] < -1.0 || quat[j] > 1.0 {
-                                    out_of_range = true;
-                                    println!("  Node {}: rotation[{}] = {} is out of range", i, j, quat[j]);
-                                }
-                            }
-                        }
-                        
-                        // Normalize the quaternion
-                        let normalized = normalize_quaternion(quat);
-                        
-                        // Update the rotation values in the JSON
-                        for j in 0..4 {
-                            rotation_array[j] = serde_json::Value::from(normalized[j]);
-                        }
-                        
-                        if out_of_range {
-                            out_of_range_nodes += 1;
-                        }
-                        normalized_nodes += 1;
-                    }
-                }
-            }
-        }
-    }
-    
-    println!("Normalized {} node rotations, {} had out-of-range values", normalized_nodes, out_of_range_nodes);
-    
-    // Get the binary blob (if any)
-    let mut buffer_data = Vec::new();
-    if let Some(blob) = gltf.blob.as_ref() {
-        buffer_data = blob.clone();
-    } else {
-        // If the GLB doesn't have a binary blob, try to load the buffers manually
-        if let Some(buffers) = gltf_json["buffers"].as_array() {
-            if !buffers.is_empty() {
-                if let Some(uri) = buffers[0].get("uri") {
-                    if let Some(uri_str) = uri.as_str() {
-                        let parent = Path::new(input_path).parent().unwrap_or_else(|| Path::new(""));
-                        let buffer_path = parent.join(uri_str);
-                        buffer_data = fs::read(buffer_path)?;
-                    }
-                }
-            }
-        }
-    }
-    
-    // Write the normalized GLB file
-    // Prepare the JSON chunk
-    let json_string = serde_json::to_string(&gltf_json)?;
-    let mut json_bytes = json_string.into_bytes();
-    
-    // JSON chunk must be 4-byte aligned
-    while json_bytes.len() % 4 != 0 {
-        json_bytes.push(0x20); // Pad with spaces
-    }
-    
-    // Ensure binary chunk is 4-byte aligned
-    while buffer_data.len() % 4 != 0 {
-        buffer_data.push(0); // Pad with zeros
-    }
-    
-    // Calculate sizes
-    let header_length = 12; // Fixed GLB header size
-    let json_chunk_header_length = 8; // Fixed JSON chunk header size
-    let bin_chunk_header_length = 8; // Fixed BIN chunk header size
-    
-    let total_length = header_length + 
-                      json_chunk_header_length + json_bytes.len() +
-                      bin_chunk_header_length + buffer_data.len();
-    
-    // Create a file to write the GLB data
-    let mut file = fs::File::create(output_path)?;
-    
-    // Write GLB header
-    // Magic: "glTF"
-    file.write_all(&[0x67, 0x6C, 0x54, 0x46])?;
-    // Version: 2
-    file.write_all(&2u32.to_le_bytes())?;
-    // Total length
-    file.write_all(&(total_length as u32).to_le_bytes())?;
-    
-    // Write JSON chunk header
-    // Chunk length
-    file.write_all(&(json_bytes.len() as u32).to_le_bytes())?;
-    // Chunk type: JSON (0x4E4F534A)
-    file.write_all(&[0x4A, 0x53, 0x4F, 0x4E])?;
-    // Write JSON chunk data
-    file.write_all(&json_bytes)?;
-    
-    // Write BIN chunk header
-    // Chunk length
-    file.write_all(&(buffer_data.len() as u32).to_le_bytes())?;
-    // Chunk type: BIN (0x004E4942)
-    file.write_all(&[0x42, 0x49, 0x4E, 0x00])?;
-    // Write BIN chunk data
-    file.write_all(&buffer_data)?;
-    
-    println!("Successfully fixed and exported model to: {}", output_path);
-    Ok(())
-}
+//fn bresenham_line(x1: isize, y1: isize, x2: isize, y2: isize) -> Vec<(isize, isize)> {
+//    let mut result = Vec::new();
+//    
+//    // Calculate changes in x and y
+//    let dx = (x2 - x1).abs();
+//    let dy = (y2 - y1).abs();
+//    
+//    // Determine the direction to step in x and y
+//    let sx = if x1 < x2 { 1 } else { -1 };
+//    let sy = if y1 < y2 { 1 } else { -1 };
+//    
+//    // Error term for deciding which voxel to move to next
+//    let mut err = if dx > dy { dx } else { -dy } / 2;
+//    let mut err2;
+//    
+//    // Start at the first point
+//    let mut x = x1;
+//    let mut y = y1;
+//    
+//    loop {
+//        // Add current point to the result
+//        result.push((x, y));
+//        
+//        // Check if we've reached the end point
+//        if x == x2 && y == y2 { break; }
+//        
+//        // Update the error term
+//        err2 = err;
+//        
+//        // Move in x direction if needed
+//        if err2 > -dx {
+//            err -= dy;
+//            x += sx;
+//        }
+//        
+//        // Move in y direction if needed
+//        if err2 < dy {
+//            err += dx;
+//            y += sy;
+//        }
+//    }
+//    
+//    result
+//}
 
 fn main() {
     if let (Some(input_path_str),Some(output_path_str)) = (std::env::args().nth(1), std::env::args().nth(2)) {
